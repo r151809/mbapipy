@@ -334,7 +334,14 @@ class Controller(object):
         if pin is not None:
             me_status_header['x-pin'] = pin
 
-        result = self._retrieve_json_at_url(url % car_id, me_status_header, "post")
+        if url == CAR_CLIMATE_ON_URL:
+            now = datetime.datetime.now()
+            post_data = { "currentDepartureTime": (now.hour*60 + now.minute) }
+            me_status_header['Content-Type']   = "application/json;charset=UTF-8"
+            me_status_header['Content-Length'] = str(len(post_data))
+            result = self._retrieve_json_at_url(url % car_id, me_status_header, "post", json.dumps(post_data))
+        else:
+            result = self._retrieve_json_at_url(url % car_id, me_status_header, "post")
         _LOGGER.debug(result)
         if result.get("status") == 'PENDING':
             wait_counter = 0
@@ -533,7 +540,7 @@ class Controller(object):
                                          me_status_header, "get")
         return res
 
-    def _retrieve_json_at_url(self, url, headers, type):
+    def _retrieve_json_at_url(self, url, headers, type, post_data=None):
         try:
             _LOGGER.debug("Connect to URL %s %s", type, str(url))
 
@@ -542,9 +549,15 @@ class Controller(object):
                                        verify=LOGIN_VERIFY_SSL_CERT,
                                        headers=headers)
             else:
-                res = self.session.post(url,
-                                        verify=LOGIN_VERIFY_SSL_CERT,
-                                        headers=headers)
+                if post_data == None:
+                    res = self.session.post(url,
+                                            verify=LOGIN_VERIFY_SSL_CERT,
+                                            headers=headers)
+                else:
+                    res = self.session.post(url,
+                                            verify=LOGIN_VERIFY_SSL_CERT,
+                                            headers=headers,
+                                            data=post_data)
         except requests.exceptions.Timeout:
             _LOGGER.exception(
                 "Connection to the api timed out at URL %s", url)
