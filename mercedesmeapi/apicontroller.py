@@ -40,6 +40,7 @@ CAR_LOCK_URL = "{0}/api/v1/vehicles/%s/doors/lock".format(URL_VHS_API)
 CAR_UNLOCK_URL = "{0}/api/v1/vehicles/%s/doors/unlock".format(URL_VHS_API)
 CAR_HEAT_ON_URL = "{0}/api/v1/vehicles/%s/auxheat/start".format(URL_VHS_API)
 CAR_HEAT_OFF_URL = "{0}/api/v1/vehicles/%s/auxheat/stop".format(URL_VHS_API)
+CAR_CLIMATE_CONF_URL = "{0}/api/v1/vehicles/%s/precond/configure".format(URL_VHS_API)
 CAR_CLIMATE_ON_URL = "{0}/api/v1/vehicles/%s/precond/start".format(URL_VHS_API)
 CAR_CLIMATE_OFF_URL = "{0}/api/v1/vehicles/%s/precondAtDeparture/disable".format(URL_VHS_API)
 CAR_FEATURE_URL = "{0}/api/v2/dashboarddata/%s/vehicle".format(URL_USR_API)
@@ -286,7 +287,14 @@ class Controller(object):
         
         _LOGGER.debug("Controller init complete. Start _get_cars")
         self._get_cars()
-
+        
+    def _round_time(self, roundTo=15):
+        t = datetime.datetime.now()  # type: datetime
+        t += datetime.timedelta(minutes=(roundTo+1))
+        t += datetime.timedelta(minutes=(t.minute / roundTo) * roundTo - t.minute)
+        t -= datetime.timedelta(seconds=(t.second))
+        return t
+                            
     def update(self):
         _LOGGER.debug("Update start")
         self._update_cars()
@@ -321,10 +329,21 @@ class Controller(object):
                                         'heater_off', None, None)
 
     def climate_on(self, car_id):
-        now = datetime.datetime.now()
-        post_data = json.dumps({ "currentDepartureTime":(now.hour*60 + now.minute) })
-        return self._execute_car_action(CAR_CLIMATE_ON_URL, car_id.get('car_id'), 'climate_on', None, post_data)
-
+        now = self._round_time()
+        now_str = "%02d:%02d" % (now.hour, now.minute)
+        post_data = json.dumps({"currentDepartureTime":(now.hour*60 + now.minute)}, separators=(',',':'))
+        _LOGGER.debug("climate_on post_data:")
+        _LOGGER.debug(post_data)
+        if self._execute_car_action(CAR_CLIMATE_ON_URL, car_id.get('car_id'), 'climate_on', None, post_data):
+            post_data2 = json.dumps({ "departureTime":now_str,
+                                      "mode":"SINGLE_DEPARTURE" }, separators=(',',':'))
+            _LOGGER.debug("climate_conf post_data:")
+            _LOGGER.debug(post_data2)
+            self._execute_car_action(CAR_CLIMATE_CONF_URL, car_id.get('car_id'), 'climate_conf', None, post_data2)
+        else:
+            _LOGGER.debug("climate_on FAILED")
+            return False
+        
     def climate_off(self, car_id):
         return self._execute_car_action(CAR_CLIMATE_OFF_URL, car_id.get('car_id'),
                                         'climate_off', None, None)
@@ -349,25 +368,20 @@ class Controller(object):
         if post_data != None:
             del me_status_header['Content-Type']
             del me_status_header['Content-Length']
-        
         if result.get("status") == 'PENDING':
             wait_counter = 0
-            while wait_counter < 30:
+            while wait_counter < 20:
                 result = self._retrieve_json_at_url(url % car_id, me_status_header, "get", None)
                 _LOGGER.debug(result)
-
-                if result.get('status') == 'PENDING':
+                if result.get('status') != 'FAILED' and result.get('status') != 'SUCCESS':
                     wait_counter = wait_counter + 1
-                    time.sleep(1)
+                    time.sleep(30)
                 else:
-                    break
-
-        self.update()
+                    break        
         if result.get('status') == 'SUCCESS':
             return True
         else:
             return False
-
 
     def _update_cars(self):
         cur_time = time.time()
@@ -557,7 +571,10 @@ class Controller(object):
 
     def _retrieve_json_at_url(self, url, headers, type, post_data=None):
         try:
-            _LOGGER.debug("Connect to URL %s %s", type, str(url))
+            if post_data == None:
+                _LOGGER.debug("Connect to URL %s %s %s", type, str(url), headers)
+            else:
+                _LOGGER.debug("Connect to URL %s %s %s %s", type, str(url), headers, post_data)
 
             if type == "get":
                 res = self.session.get(url,
